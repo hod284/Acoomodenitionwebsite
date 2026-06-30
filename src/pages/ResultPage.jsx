@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useLocation, useNavigate, Navigate } from "react-router-dom";
 import { CheckIcon, XIcon } from "../components/icons/index.jsx";
 import { won } from "../utils/format.js";
@@ -6,6 +7,32 @@ export default function ResultPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const state = location.state;
+
+  // 결제 결과를 F12 콘솔에도 자동으로 출력 — 화면을 안 보고도 개발자가 바로 확인 가능
+  useEffect(() => {
+    if (!state) return;
+    const { status, data, trackId, errorMessage } = state;
+    const responseReceived = data !== null && data !== undefined;
+
+    console.groupCollapsed(
+      `%c[STAYNEST 결제 결과] ${status === "success" ? "✅ 성공" : "❌ 실패"} — trackId: ${trackId}`,
+      `color: ${status === "success" ? "#2f8a5e" : "#c4392b"}; font-weight: bold;`
+    );
+    console.log("주문번호(trackId):", trackId);
+    console.log("MTouch 응답 수신 여부:", responseReceived ? "수신함" : "수신 못함");
+    if (errorMessage) {
+      console.error("에러 코드:", errorMessage);
+    }
+    if (responseReceived) {
+      console.log("응답코드(resultCd):", data.result?.resultCd ?? "(없음)");
+      console.log("거래번호(trxId):", data.pay?.trxId ?? "(없음)");
+      console.log("승인번호(authCd):", data.pay?.authCd ?? "(없음)");
+      console.log("전체 응답 객체:", data);
+    } else {
+      console.warn("MTouch로부터 응답 자체를 받지 못했습니다. 결제 모듈 로드 실패, 결제키 미설정, 네트워크 문제 등을 의심해보세요.");
+    }
+    console.groupEnd();
+  }, [state]);
 
   // 결제 페이지를 거치지 않고 직접 /payment/result로 들어온 경우 보호
   if (!state) return <Navigate to="/" replace />;
@@ -51,11 +78,6 @@ export default function ResultPage() {
           </button>
         </div>
       </div>
-
-      <details className="sn-raw">
-        <summary>API 응답 원본 (개발자 확인용)</summary>
-        <pre>{JSON.stringify(data, null, 2)}</pre>
-      </details>
     </div>
   );
 }

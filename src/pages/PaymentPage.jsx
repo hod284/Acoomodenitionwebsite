@@ -86,8 +86,9 @@ export default function PaymentPage() {
         navigate("/payment/result", { state: { status: "fail", data: mtouchResponse, total, trackId } });
       }
     } catch (err) {
+      console.error("[STAYNEST] 결제 처리 중 오류:", err);
       setProcessing(false);
-      navigate("/payment/result", { state: { status: "fail", data: null, total, trackId } });
+      navigate("/payment/result", { state: { status: "fail", data: null, total, trackId, errorMessage: err?.message } });
     }
   }, [payerName, payerTel, payerEmail, total, products, scriptStatus, trackId, user, cart, clearCart, navigate, keyConfigured]);
 
