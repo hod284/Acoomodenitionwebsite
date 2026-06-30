@@ -6,6 +6,8 @@ import StayCard from "../components/StayCard.jsx";
 export default function HomePage() {
   const [stays, setStays] = useState(null);
   const [error, setError] = useState(null);
+  const [keyword, setKeyword] = useState("");
+  const [searchTerm, setSearchTerm] = useState(""); // 실제로 필터링에 적용된 검색어
 
   useEffect(() => {
     let alive = true;
@@ -22,6 +24,20 @@ export default function HomePage() {
     };
   }, []);
 
+  const handleSearch = (e) => {
+    e.preventDefault();
+    setSearchTerm(keyword.trim());
+  };
+
+  const visibleStays = stays
+    ? searchTerm
+      ? stays.filter((s) => {
+          const term = searchTerm.toLowerCase();
+          return s.name.toLowerCase().includes(term) || s.region.toLowerCase().includes(term);
+        })
+      : stays
+    : null;
+
   return (
     <>
       <section className="sn-hero">
@@ -34,28 +50,53 @@ export default function HomePage() {
             <br />
             여행이 되는 곳
           </h1>
-          <div className="sn-search">
+          <form className="sn-search" onSubmit={handleSearch}>
             <div className="sn-search-field">
               <PinIcon className="sn-icon-sm" />
-              <input placeholder="지역, 숙소명으로 검색" />
+              <input
+                placeholder="지역, 숙소명으로 검색"
+                value={keyword}
+                onChange={(e) => setKeyword(e.target.value)}
+              />
             </div>
-            <button className="sn-search-btn">검색</button>
-          </div>
+            <button type="submit" className="sn-search-btn">
+              검색
+            </button>
+          </form>
         </div>
       </section>
 
       <section className="sn-section">
         <div className="sn-section-head">
-          <h2>지금 인기 있는 숙소</h2>
-          <p>STAYNEST 게스트들이 가장 많이 머무른 공간</p>
+          <h2>{searchTerm ? `'${searchTerm}' 검색 결과` : "지금 인기 있는 숙소"}</h2>
+          <p>
+            {searchTerm
+              ? `${visibleStays ? visibleStays.length : 0}개의 숙소를 찾았어요`
+              : "STAYNEST 게스트들이 가장 많이 머무른 공간"}
+          </p>
+          {searchTerm && (
+            <button
+              className="sn-search-clear"
+              onClick={() => {
+                setSearchTerm("");
+                setKeyword("");
+              }}
+            >
+              전체 보기로 돌아가기
+            </button>
+          )}
         </div>
 
         {error && <p className="sn-error">{error}</p>}
         {!stays && !error && <p className="sn-loading-text">숙소 정보를 불러오는 중...</p>}
 
-        {stays && (
+        {visibleStays && visibleStays.length === 0 && (
+          <p className="sn-loading-text">검색 결과가 없어요. 다른 지역이나 숙소명으로 검색해보세요.</p>
+        )}
+
+        {visibleStays && visibleStays.length > 0 && (
           <div className="sn-grid">
-            {stays.map((s) => (
+            {visibleStays.map((s) => (
               <StayCard key={s.id} stay={s} />
             ))}
           </div>

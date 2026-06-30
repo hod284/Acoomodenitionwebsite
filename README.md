@@ -101,65 +101,92 @@ export async function fetchStays() {
 비활성화되어 시도 자체가 불가능합니다. (실제 결제 없이 "성공"처럼 보이는
 화면이 뜨는 일은 없습니다.)
 
-## AWS 배포 (GitHub Actions 자동배포)
+## AWS 배포 (GitHub Actions → EC2 자동배포)
 
 `main` 브랜치에 push되면 `.github/workflows/deploy.yml`이 자동으로
-빌드 → S3 업로드 → CloudFront 캐시 무효화까지 실행합니다.
+빌드 → EC2 서버로 파일 전송 → Nginx 재시작까지 실행합니다.
 
-**워크플로우 파일에는 AWS 계정 정보가 전혀 들어있지 않습니다.** 코드에
-직접 키를 넣지 않고, GitHub 저장소의 **Secrets**를 통해서만 값을
+**워크플로우 파일에는 서버 접속 정보가 전혀 들어있지 않습니다.** 코드에
+직접 키나 IP를 넣지 않고, GitHub 저장소의 **Secrets**를 통해서만 값을
 주입받습니다.
 
-### 등록해야 하는 GitHub Secrets
+### 전체 구조
+
+```
+GitHub push
+   ↓
+GitHub Actions가 npm run build 실행 (dist/ 생성)
+   ↓
+SSH/SCP로 EC2 서버에 dist/ 내용 전송
+   ↓
+EC2의 Nginx가 그 파일들을 손님에게 서빙
+```
+
+S3는 사용하지 않습니다. EC2 인스턴스 하나가 빌드 결과물을 직접 서빙합니다.
+
+### 1. EC2 인스턴스 준비 (최초 1회, 수동)
+
+- AMI: Amazon Linux 2023, 인스턴스 유형은 t3.micro 정도로 충분
+- 보안 그룹 인바운드: HTTP(80) 전체 허용, SSH(22)는 본인 IP만 허용
+- 인스턴스 생성 시 키 페어(.pem) 다운로드 — 이 파일 내용이 `EC2_SSH_KEY` Secret이 됩니다
+
+서버에 접속해서 Nginx를 설치합니다.
+
+```bash
+ssh -i 키페어.pem ec2-user@EC2_퍼블릭IP
+
+sudo dnf install -y nginx
+sudo systemctl enable nginx
+sudo systemctl start nginx
+
+# 배포 파일이 들어갈 디렉토리 생성
+mkdir -p ~/staynest/dist
+```
+
+Nginx가 그 디렉토리를 바라보도록 설정합니다.
+
+```bash
+sudo tee /etc/nginx/conf.d/staynest.conf << 'EOF'
+server {
+    listen 80;
+    server_name _;
+    root /home/ec2-user/staynest/dist;
+    index index.html;
+
+    # React Router(SPA) 대응 — 없는 경로 요청 시 index.html로
+    location / {
+        try_files $uri /index.html;
+    }
+}
+EOF
+
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+### 2. 등록해야 하는 GitHub Secrets
 
 저장소 → `Settings` → `Secrets and variables` → `Actions` → `New repository secret`
-에서 아래 항목을 등록하면 됩니다 (회사 AWS 담당자가 진행).
 
 | Secret 이름 | 필수 | 설명 | 예시 |
 |---|---|---|---|
-| `AWS_ACCESS_KEY_ID` | 필수 | IAM 사용자 액세스 키 | `AKIA...` |
-| `AWS_SECRET_ACCESS_KEY` | 필수 | IAM 사용자 시크릿 키 | - |
-| `AWS_REGION` | 필수 | 리전 | `ap-northeast-2` |
-| `S3_BUCKET_NAME` | 필수 | 배포 대상 S3 버킷명 | `staynest-prod` |
-| `CLOUDFRONT_DISTRIBUTION_ID` | 선택 | CloudFront 사용 시 배포 ID | `E1A2B3C4D5` |
+| `EC2_HOST` | 필수 | EC2 퍼블릭 IP 또는 도메인 | `13.125.xx.xx` |
+| `EC2_USER` | 필수 | 접속 계정명 | `ec2-user` |
+| `EC2_SSH_KEY` | 필수 | .pem 키 파일의 전체 내용 (그대로 복사) | `-----BEGIN RSA...` |
+| `EC2_DEPLOY_PATH` | 필수 | 빌드 파일을 둘 서버 경로 | `/home/ec2-user/staynest/dist` |
 
-이 5개 값만 채워주면 코드 수정 없이 바로 자동배포가 동작합니다.
-CloudFront를 안 쓴다면 `CLOUDFRONT_DISTRIBUTION_ID`는 비워두면 되고,
-그 단계는 자동으로 건너뜁니다.
+`EC2_SSH_KEY`는 다운로드한 `.pem` 파일을 텍스트 에디터로 열어서, 내용
+전체(`-----BEGIN ... PRIVATE KEY-----`부터 `-----END...-----`까지)를
+그대로 복사해 붙여넣으면 됩니다.
 
-### IAM 권한 (최소 권한 예시)
-
-배포에 사용하는 IAM 사용자/역할에는 아래 정도의 권한만 있으면 됩니다.
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": ["s3:PutObject", "s3:DeleteObject", "s3:ListBucket"],
-      "Resource": [
-        "arn:aws:s3:::<버킷명>",
-        "arn:aws:s3:::<버킷명>/*"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": ["cloudfront:CreateInvalidation"],
-      "Resource": "*"
-    }
-  ]
-}
-```
+이 4개 값만 채워주면 코드 수정 없이 바로 자동배포가 동작합니다.
 
 ### React Router(SPA) 설정 주의사항
 
 이 프로젝트는 `/stays/:id`, `/cart`, `/payment` 같은 실제 URL 경로를
-사용하는 SPA입니다. S3/CloudFront에서 404를 `index.html`로 돌려주는
-설정이 안 되어 있으면 새로고침 시 빈 화면이 나옵니다.
-
-- **S3 정적 웹사이트 호스팅**: Error document를 `index.html`로 지정
-- **CloudFront**: Custom Error Response에서 403/404 → `/index.html`, 응답코드 200으로 설정
+사용하는 SPA입니다. 위 Nginx 설정의 `try_files $uri /index.html;`이
+바로 이 문제(새로고침 시 404)를 막아주는 부분입니다. 직접 설정하실 때
+빠뜨리지 않도록 주의하세요.
 
 ### 수동 배포(참고용)
 
@@ -167,8 +194,8 @@ GitHub Actions 없이 로컬에서 직접 배포하려면:
 
 ```bash
 npm run build
-aws s3 sync dist/ s3://<버킷명> --delete
-aws cloudfront create-invalidation --distribution-id <배포ID> --paths "/*"
+scp -i 키페어.pem -r dist/* ec2-user@EC2_IP:/home/ec2-user/staynest/dist/
+ssh -i 키페어.pem ec2-user@EC2_IP "sudo systemctl reload nginx"
 ```
 
 ## 테스트 계정 (더미, DB 없음)
