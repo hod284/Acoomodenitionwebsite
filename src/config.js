@@ -1,13 +1,18 @@
 // 실제 운영 연동 시 이 파일의 값만 교체하면 됩니다.
 export const CONFIG = {
-  MTOUCH_SCRIPT_URL: "https://svcapi.mtouch.com/js/clientsideV2.js",
+  // 1차 PG 결제 서버 주소
+  // 개발: https://devpay.kwonps.com
+  // 운영: https://pay.kwonps.com
+  PAY_BASE_URL: "https://pay.kwonps.com",
 
-  // ⚠️ 발급받은 온라인 결제키(pk_로 시작)를 받기 전까지 공란입니다.
-  // 키가 없으면 결제 페이지에서 경고가 표시되고 KWON.pay()를 호출하지 않습니다.
-  PUBLIC_KEY: "",
+  // 케이원피에스에서 발급받은 가맹점 아이디
+  MERCHANT_ID: "2128703111",
 
-  REDIRECT_URL: "https://www.staynest.example.com/payment/redirect",
-  WEBHOOK_URL: "https://www.staynest.example.com/payment/webhook",
-  // 백엔드가 생기면 채워서 services/* 에서 사용
-  API_BASE_URL: "", // 예: "https://api.staynest.com"
+  // 온라인결제 KEY (License Key) — requestHash 계산용
+  // ⚠️ 실서비스에서는 절대 클라이언트에 노출하면 안 됩니다.
+  //    반드시 서버(백엔드)에서 requestHash를 계산해서 내려받는 방식으로 변경하세요.
+  LICENSE_KEY: "5f6062459d726c9b5619fb2104ab417cdcf333e0d8732ac3a12696c906267dd4",
+
+  // 백엔드 서버 주소 (나중에 채우기)
+  API_BASE_URL: "",
 };

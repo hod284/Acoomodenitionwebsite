@@ -1,108 +1,107 @@
 import { CONFIG } from "../config.js";
 
 /**
- * MTouch(케이원피에스) 온라인인증결제 연동.
- * "온라인인증결제 API 연동가이드" 4장(JAVASCRIPT INTEGRATION) 기준으로 작성.
- * 이 파일은 데모가 아니라 실제로 동작하는 연동 코드입니다.
- * (CONFIG.PUBLIC_KEY를 발급받은 실키로 교체하면 운영에 바로 사용 가능)
- */
-
-let scriptLoadingPromise = null;
-
-/**
- * 온라인 결제키가 설정되어 있는지 여부.
- * 키가 비어있으면 결제 페이지에서 경고를 표시하고 KWON.pay() 호출을 막는 데 사용합니다.
- */
-export function isPublicKeyConfigured() {
-  return Boolean(CONFIG.PUBLIC_KEY && CONFIG.PUBLIC_KEY.trim().length > 0);
-}
-
-/**
- * clientsideV2.js 스크립트 로드. 1회만 로드되고 이후엔 캐시된 Promise를 재사용합니다.
- * @returns {Promise<"ready"|"failed">}
- */
-export function loadMtouchScript() {
-  if (typeof window !== "undefined" && window.KWON) {
-    return Promise.resolve("ready");
-  }
-  if (scriptLoadingPromise) return scriptLoadingPromise;
-
-  scriptLoadingPromise = new Promise((resolve) => {
-    const existing = document.querySelector(`script[src="${CONFIG.MTOUCH_SCRIPT_URL}"]`);
-    const onReady = () => {
-      window.KWON?.debug?.(true); // 운영 적용 시 제거 권장 (디버그 텍스트 노출)
-      resolve("ready");
-    };
-    if (existing) {
-      existing.addEventListener("load", onReady);
-      existing.addEventListener("error", () => resolve("failed"));
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = CONFIG.MTOUCH_SCRIPT_URL;
-    script.async = true;
-    const timeout = setTimeout(() => resolve("failed"), 4000);
-    script.onload = () => {
-      clearTimeout(timeout);
-      onReady();
-    };
-    script.onerror = () => {
-      clearTimeout(timeout);
-      resolve("failed");
-    };
-    document.head.appendChild(script);
-  });
-
-  return scriptLoadingPromise;
-}
-
-/**
- * KWON.pay() 호출. 연동가이드 4.2 Pay Request Object 규격을 그대로 따릅니다.
+ * 케이원피에스 1차 PG 카드결제 연동
+ * "케이원피에스_1차PG인증_결제_연동가이드" 기준으로 구현
  *
- * @param {object} params
- * @param {number} params.amount        총 결제금액
- * @param {Array}  params.products      상품정보 [{name, price, qty, desc}]
- * @param {string} params.trackId       가맹점 주문번호 (Unique)
- * @param {string} params.payerName     구매자 성명
- * @param {string} params.payerEmail    구매자 이메일
- * @param {string} params.payerTel      구매자 연락처
- * @param {string} [params.udf1]        가맹점 정의 필드
- * @param {"loading"|"ready"|"failed"} params.scriptStatus
- * @returns {Promise<object>} MTouch 응답 객체 (result, pay)
+ * 결제 방식: HTML form을 동적으로 생성해서
+ *            https://devpay.kwonps.com/card/payment 로 POST submit
+ *            → 결제창이 팝업(PC) 또는 현재 창(모바일)으로 호출됨
+ *
+ * ⚠️ requestHash는 원래 서버에서 계산해야 합니다.
+ *    licenseKey가 브라우저에 노출되기 때문입니다.
+ *    현재는 테스트 목적으로만 클라이언트에서 계산합니다.
  */
-export function payWithMtouch({ amount, products, trackId, payerName, payerEmail, payerTel, udf1, scriptStatus }) {
-  if (!isPublicKeyConfigured()) {
-    return Promise.reject(new Error("PUBLIC_KEY_NOT_CONFIGURED"));
-  }
 
-  // 결제 모듈이 준비되지 않았다면(스크립트 로드 실패 등) 절대로 가짜 성공을 만들지 않고
-  // 명확한 실패로 처리합니다. 키가 있어도 모듈이 없으면 결제는 진행될 수 없습니다.
-  if (scriptStatus !== "ready" || !window.KWON || typeof window.KWON.pay !== "function") {
-    return Promise.reject(new Error("PAYMENT_MODULE_NOT_READY"));
-  }
+// SHA256 해시 계산 (Web Crypto API 사용 - 브라우저 내장)
+async function sha256(message) {
+  const msgBuffer = new TextEncoder().encode(message);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 
-  return new Promise((resolve, reject) => {
-    const payload = {
-      payRoute: "3d", // 온라인인증은 '3d' 고정
-      amount,
-      fillerAmt: 0, // 복합과세 계약 가맹점만 사용
-      publicKey: CONFIG.PUBLIC_KEY,
-      products,
-      responseFunction: (data) => resolve(data),
-      redirectUrl: CONFIG.REDIRECT_URL,
-      webhookUrl: CONFIG.WEBHOOK_URL,
-      udf1: udf1 || "",
-      udf2: "",
-      trackId,
-      payerName,
-      payerEmail,
-      payerTel,
-    };
+// 오늘 날짜를 yyyymmdd 형식으로 반환
+function getTodayString() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}${mm}${dd}`;
+}
 
-    try {
-      window.KWON.pay(payload);
-    } catch (err) {
-      reject(err);
+/**
+ * 결제창 호출
+ * @param {object} params
+ * @param {string} params.orderNo    - 가맹점 주문번호 (unique)
+ * @param {number} params.amount     - 결제금액
+ * @param {string} params.product    - 상품명
+ * @param {string} params.userName   - 고객명
+ * @param {string} params.userId     - 고객아이디
+ * @param {string} params.userEmail  - 고객이메일 (선택)
+ * @param {string} params.payCompleteUrl - 결제완료 후 이동 URL (필수)
+ * @param {string} params.payCancelUrl   - 결제취소 후 이동 URL (필수)
+ * @param {string} params.notiUrl    - 노티 수신 URL (선택)
+ */
+export async function payWithKwon({
+  orderNo,
+  amount,
+  product,
+  userName,
+  userId,
+  userEmail,
+  payCompleteUrl,
+  payCancelUrl,
+  notiUrl,
+}) {
+  const today = getTodayString();
+
+  // requestHash 계산: 결제일자 + merchantId + orderNo + amount + licenseKey
+  const hashSource = `${today}${CONFIG.MERCHANT_ID}${orderNo}${amount}${CONFIG.LICENSE_KEY}`;
+  const requestHash = await sha256(hashSource);
+
+  // HTML form을 동적 생성해서 POST submit — 이것이 이 API의 결제창 호출 방식
+  const form = document.createElement("form");
+  form.method = "POST";
+  form.action = `${CONFIG.PAY_BASE_URL}/card/payment`;
+
+  // PC 환경: 팝업(window.open), 모바일: self (가이드 3.3.1 주의사항 참고)
+  const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+  if (isMobile) {
+    form.target = "_self";
+  } else {
+    const popup = window.open("", "kwon_payment", "width=500,height=700");
+    if (!popup) {
+      throw new Error("POPUP_BLOCKED");
     }
+    form.target = "kwon_payment";
+  }
+
+  const fields = {
+    merchantId: CONFIG.MERCHANT_ID,
+    payMethod: "CARD",
+    orderNo,
+    amount,
+    taxFreeAmount: 0,
+    product,
+    userName,
+    userId,
+    userEmail: userEmail || "",
+    notiUrl: notiUrl || "",
+    payCompleteUrl,
+    payCancelUrl,
+    requestHash,
+  };
+
+  Object.entries(fields).forEach(([key, value]) => {
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = key;
+    input.value = value;
+    form.appendChild(input);
   });
+
+  document.body.appendChild(form);
+  form.submit();
+  document.body.removeChild(form);
 }

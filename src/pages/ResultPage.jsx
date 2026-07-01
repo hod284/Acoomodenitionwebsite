@@ -1,75 +1,98 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useLocation, useNavigate, Navigate } from "react-router-dom";
+import { useCart } from "../context/CartContext.jsx";
 import { CheckIcon, XIcon } from "../components/icons/index.jsx";
 import { won } from "../utils/format.js";
 
 export default function ResultPage() {
   const location = useLocation();
   const navigate = useNavigate();
-  const state = location.state;
+  const { clearCart } = useCart();
+  const [params, setParams] = useState(null);
 
-  // 결제 결과를 F12 콘솔에도 자동으로 출력 — 화면을 안 보고도 개발자가 바로 확인 가능
   useEffect(() => {
-    if (!state) return;
-    const { status, data, trackId, errorMessage } = state;
-    const responseReceived = data !== null && data !== undefined;
+    // 새 1차PG API는 결제 결과를 form submit(POST)으로 payCompleteUrl에 전달
+    // React SPA에서는 URL 파라미터 또는 location.state 두 가지 경로로 올 수 있음
 
+    // 1) location.state로 온 경우 (기존 에러 처리 등)
+    if (location.state) {
+      setParams(location.state);
+      return;
+    }
+
+    // 2) URL 쿼리 파라미터로 온 경우 (form POST가 GET으로 리다이렉트된 경우 등)
+    const searchParams = new URLSearchParams(location.search);
+    if (searchParams.has("status")) {
+      const result = {};
+      searchParams.forEach((value, key) => { result[key] = value; });
+      setParams({ fromForm: true, ...result });
+
+      // 성공이면 장바구니 비우기
+      if (result.status === "SUCCESS") {
+        clearCart();
+      }
+    }
+  }, [location, clearCart]);
+
+  // 콘솔에 결제 결과 자동 출력
+  useEffect(() => {
+    if (!params) return;
+    const success = params.status === "SUCCESS" || params.status === "success";
     console.groupCollapsed(
-      `%c[STAYNEST 결제 결과] ${status === "success" ? "✅ 성공" : "❌ 실패"} — trackId: ${trackId}`,
-      `color: ${status === "success" ? "#2f8a5e" : "#c4392b"}; font-weight: bold;`
+      `%c[STAYNEST 결제 결과] ${success ? "✅ 성공" : "❌ 실패"} — orderNo: ${params.orderNo || params.trackId || "-"}`,
+      `color: ${success ? "#2f8a5e" : "#c4392b"}; font-weight: bold;`
     );
-    console.log("주문번호(trackId):", trackId);
-    console.log("MTouch 응답 수신 여부:", responseReceived ? "수신함" : "수신 못함");
-    if (errorMessage) {
-      console.error("에러 코드:", errorMessage);
-    }
-    if (responseReceived) {
-      console.log("응답코드(resultCd):", data.result?.resultCd ?? "(없음)");
-      console.log("거래번호(trxId):", data.pay?.trxId ?? "(없음)");
-      console.log("승인번호(authCd):", data.pay?.authCd ?? "(없음)");
-      console.log("전체 응답 객체:", data);
-    } else {
-      console.warn("MTouch로부터 응답 자체를 받지 못했습니다. 결제 모듈 로드 실패, 결제키 미설정, 네트워크 문제 등을 의심해보세요.");
-    }
+    console.log("전체 결과:", params);
     console.groupEnd();
-  }, [state]);
+  }, [params]);
 
-  // 결제 페이지를 거치지 않고 직접 /payment/result로 들어온 경우 보호
-  if (!state) return <Navigate to="/" replace />;
+  // 아무 데이터도 없으면 홈으로
+  if (!params && !location.state && !location.search) {
+    return <Navigate to="/" replace />;
+  }
 
-  const { status, data, total, trackId } = state;
-  const success = status === "success";
-  const result = data?.result || {};
-  const pay = data?.pay || {};
+  if (!params) {
+    return <div className="sn-result-page"><p className="sn-loading-text">결과를 불러오는 중...</p></div>;
+  }
+
+  const success = params.status === "SUCCESS" || params.status === "success";
 
   return (
     <div className="sn-result-page">
       <div className={`sn-result-card ${success ? "ok" : "fail"}`}>
-        <div className="sn-result-icon">{success ? <CheckIcon className="sn-icon-lg" /> : <XIcon className="sn-icon-lg" />}</div>
+        <div className="sn-result-icon">
+          {success ? <CheckIcon className="sn-icon-lg" /> : <XIcon className="sn-icon-lg" />}
+        </div>
         <h1>{success ? "결제가 완료되었습니다" : "결제에 실패했습니다"}</h1>
-        <p className="sn-result-sub">{result.advanceMsg || result.resultMsg || "결과 정보를 확인해주세요."}</p>
+        <p className="sn-result-sub">{params.message || "결과 정보를 확인해주세요."}</p>
 
         <div className="sn-result-table">
           <div>
             <span>주문번호</span>
-            <span>{trackId}</span>
+            <span>{params.orderNo || params.trackId || "-"}</span>
           </div>
           <div>
-            <span>거래번호(trxId)</span>
-            <span>{pay.trxId || "-"}</span>
+            <span>거래번호(transactionId)</span>
+            <span>{params.transactionId || "-"}</span>
           </div>
           <div>
             <span>승인번호</span>
-            <span>{pay.authCd || "-"}</span>
+            <span>{params.approvedNo || "-"}</span>
           </div>
           <div>
             <span>결제금액</span>
-            <span>{won(total || 0)}</span>
+            <span>{params.amount ? won(Number(params.amount)) : "-"}</span>
           </div>
           <div>
-            <span>응답코드</span>
-            <span>{result.resultCd || "-"}</span>
+            <span>거래상태</span>
+            <span>{params.status || "-"}</span>
           </div>
+          {params.cardName && (
+            <div>
+              <span>카드</span>
+              <span>{params.cardName} ({params.cardNo || ""})</span>
+            </div>
+          )}
         </div>
 
         <div className="sn-result-actions">
